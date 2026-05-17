@@ -12,6 +12,7 @@ export default function GoalForm({ onSubmit }: GoalFormProps) {
     title: '',
     description: '',
     uom: 'NUMERIC',
+    metricType: 'MIN',
     target: '',
     weightage: '10',
   })
@@ -50,6 +51,10 @@ export default function GoalForm({ onSubmit }: GoalFormProps) {
       title: formData.title,
       description: formData.description,
       uom: formData.uom,
+      metricType:
+        formData.uom === 'NUMERIC' || formData.uom === 'PERCENTAGE'
+          ? formData.metricType
+          : undefined,
       target: target,
       weightage: weightage,
       status: 'NOT_STARTED',
@@ -61,6 +66,7 @@ export default function GoalForm({ onSubmit }: GoalFormProps) {
       title: '',
       description: '',
       uom: 'NUMERIC',
+      metricType: 'MIN',
       target: '',
       weightage: '10',
     })
@@ -123,6 +129,21 @@ export default function GoalForm({ onSubmit }: GoalFormProps) {
               <option value="ZERO">Zero-based (e.g., Safety incidents)</option>
             </select>
           </div>
+
+          {(formData.uom === 'NUMERIC' || formData.uom === 'PERCENTAGE') && (
+            <div className="form-group">
+              <label className="form-label">Measurement Logic *</label>
+              <select
+                name="metricType"
+                value={formData.metricType}
+                onChange={handleChange}
+                className="form-select"
+              >
+                <option value="MIN">Min: Higher is better (Achievement / Target)</option>
+                <option value="MAX">Max: Lower is better (Target / Achievement)</option>
+              </select>
+            </div>
+          )}
 
           <div className="form-group">
             <label className="form-label">Target Value *</label>

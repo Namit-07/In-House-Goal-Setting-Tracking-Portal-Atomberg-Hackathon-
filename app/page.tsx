@@ -1,58 +1,60 @@
 'use client'
 
-import { useState } from 'react'
-import Dashboard from '@/components/Dashboard'
-import RoleSelector from '@/components/RoleSelector'
-
-type UserRole = 'EMPLOYEE' | 'MANAGER' | 'ADMIN' | null
+import { useMemo } from 'react'
+import { signIn, signOut, useSession } from 'next-auth/react'
+import Dashboard from '../components/Dashboard'
+import RoleSelector from '../components/RoleSelector'
+import { demoUsers } from '../lib/demo-users'
 
 export default function Home() {
-  const [currentRole, setCurrentRole] = useState<UserRole>(null)
-  const [currentUser, setCurrentUser] = useState<{
-    id: string
-    name: string
-    email: string
-    role: UserRole
-  } | null>(null)
+  const { data: session, status } = useSession()
 
-  const handleRoleSelect = (role: UserRole) => {
-    // Demo users
-    const demoUsers: Record<string, any> = {
-      EMPLOYEE: {
-        id: 'emp-001',
-        name: 'John Doe',
-        email: 'john.doe@atomberg.com',
-        role: 'EMPLOYEE',
-        reportingManagerId: 'mgr-001',
-        department: 'Engineering',
-      },
-      MANAGER: {
-        id: 'mgr-001',
-        name: 'Sarah Smith',
-        email: 'sarah.smith@atomberg.com',
-        role: 'MANAGER',
-        reportingManagerId: 'admin-001',
-        department: 'Engineering',
-      },
-      ADMIN: {
-        id: 'admin-001',
-        name: 'Admin User',
-        email: 'admin@atomberg.com',
-        role: 'ADMIN',
-        department: 'HR',
-      },
+  const handleRoleSelect = async (role: 'EMPLOYEE' | 'MANAGER' | 'ADMIN') => {
+    const demoUser = demoUsers.find((user) => user.role === role)
+    if (!demoUser) {
+      return
     }
 
-    setCurrentRole(role)
-    setCurrentUser(demoUsers[role || 'EMPLOYEE'])
+    await signIn('credentials', {
+      email: demoUser.email,
+      role: demoUser.role,
+      password: demoUser.password,
+      callbackUrl: '/',
+      redirect: false,
+    })
   }
 
   const handleLogout = () => {
-    setCurrentRole(null)
-    setCurrentUser(null)
+    void signOut({ callbackUrl: '/' })
   }
 
-  if (!currentRole || !currentUser) {
+  const currentUser = useMemo(() => {
+    if (!session?.user) {
+      return null
+    }
+
+    const sessionUser = session.user as {
+      id?: string
+      name?: string | null
+      email?: string | null
+      role?: 'EMPLOYEE' | 'MANAGER' | 'ADMIN'
+      department?: string
+    }
+
+    return {
+      id: sessionUser.id || 'session-user',
+      name: sessionUser.name || 'User',
+      email: sessionUser.email || '',
+      role: sessionUser.role || 'EMPLOYEE',
+      department: sessionUser.department || 'Engineering',
+    }
+  }, [session])
+
+  if (status === 'loading') {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>
+  }
+
+  if (!currentUser) {
     return <RoleSelector onRoleSelect={handleRoleSelect} />
   }
 

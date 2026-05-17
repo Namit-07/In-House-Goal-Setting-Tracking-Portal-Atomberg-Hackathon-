@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import ManagerCheckIn from '../checkin/ManagerCheckIn'
+import { appendAuditLog } from '../../lib/auditLog'
+import { loadGoalSheets, saveGoalSheets } from '../../lib/persistence'
 
 interface Goal {
   id: string
@@ -9,6 +11,7 @@ interface Goal {
   title: string
   description?: string
   uom: string
+  metricType?: 'MIN' | 'MAX'
   target?: number
   weightage: number
   actualAchievement?: number
@@ -47,17 +50,27 @@ export default function ManagerDashboard({
 
   // Load submissions from localStorage
   useEffect(() => {
-    const allGoalSheets = localStorage.getItem('all-goalsheets')
-    if (allGoalSheets) {
-      const sheets = JSON.parse(allGoalSheets)
-      const submitted = sheets.filter((s: GoalSheet) => 
-        s.status === 'SUBMITTED' || s.status === 'APPROVED'
+    void (async () => {
+      const sheets = await loadGoalSheets()
+      const submitted = sheets.filter(
+        (s) => s.status === 'SUBMITTED' || s.status === 'APPROVED'
       )
-      setSubmissions(submitted)
-    }
+      setSubmissions(submitted as GoalSheet[])
+    })()
   }, [])
 
   const handleApprove = (submission: GoalSheet) => {
+    const totalWeightage = submission.goals.reduce((sum, g) => sum + Number(g.weightage || 0), 0)
+    if (Math.abs(totalWeightage - 100) > 0.01) {
+      alert(`Cannot approve: total weightage must be 100%. Current ${totalWeightage}%`)
+      return
+    }
+
+    if (submission.goals.some((g) => Number(g.weightage || 0) < 10)) {
+      alert('Cannot approve: each goal must have at least 10% weightage')
+      return
+    }
+
     if (window.confirm(`Approve goals for ${submission.employeeName}?`)) {
       const updatedSubmission = {
         ...submission,
@@ -73,6 +86,7 @@ export default function ManagerDashboard({
           s.id === submission.id ? updatedSubmission : s
         )
         localStorage.setItem('all-goalsheets', JSON.stringify(updatedSheets))
+        void saveGoalSheets(updatedSheets as any)
       }
 
       // Also update employee's local storage
@@ -80,12 +94,61 @@ export default function ManagerDashboard({
       const employeeSheet = localStorage.getItem(employeeKey)
       if (employeeSheet) {
         const parsed = JSON.parse(employeeSheet)
-        localStorage.setItem(employeeKey, JSON.stringify({ ...parsed, status: 'LOCKED' }))
+        localStorage.setItem(
+          employeeKey,
+          JSON.stringify({
+            ...parsed,
+            status: 'LOCKED',
+            goals: submission.goals,
+            approvedAt: updatedSubmission.approvedAt,
+          })
+        )
       }
 
       setSubmissions(submissions.filter((s) => s.id !== submission.id))
       setSelectedSubmission(null)
+      appendAuditLog({
+        action: 'GOAL_APPROVED',
+        actorName: user.name,
+        actorRole: 'MANAGER',
+        details: `${user.name} approved goals for ${submission.employeeName} after inline review edits`,
+      })
       alert('Goals approved successfully!')
+    }
+  }
+
+  const handleInlineGoalEdit = (
+    goalId: string,
+    field: 'target' | 'weightage',
+    value: number
+  ) => {
+    if (!selectedSubmission) {
+      return
+    }
+
+    const updatedSubmission = {
+      ...selectedSubmission,
+      goals: selectedSubmission.goals.map((goal) =>
+        goal.id === goalId ? { ...goal, [field]: value } : goal
+      ),
+    }
+
+    setSelectedSubmission(updatedSubmission)
+
+    setSubmissions((prev) =>
+      prev.map((submission) =>
+        submission.id === updatedSubmission.id ? updatedSubmission : submission
+      )
+    )
+
+    const allGoalSheets = localStorage.getItem('all-goalsheets')
+    if (allGoalSheets) {
+      const sheets = JSON.parse(allGoalSheets)
+      const updatedSheets = sheets.map((sheet: GoalSheet) =>
+        sheet.id === updatedSubmission.id ? updatedSubmission : sheet
+      )
+      localStorage.setItem('all-goalsheets', JSON.stringify(updatedSheets))
+      void saveGoalSheets(updatedSheets as any)
     }
   }
 
@@ -110,11 +173,18 @@ export default function ManagerDashboard({
           s.id === submission.id ? updatedSubmission : s
         )
         localStorage.setItem('all-goalsheets', JSON.stringify(updatedSheets))
+        void saveGoalSheets(updatedSheets as any)
       }
 
       setSubmissions(submissions.filter((s) => s.id !== submission.id))
       setSelectedSubmission(null)
       setFeedbackNote('')
+      appendAuditLog({
+        action: 'GOAL_REJECTED',
+        actorName: user.name,
+        actorRole: 'MANAGER',
+        details: `${user.name} rejected goals for ${submission.employeeName}. Reason: ${reason}`,
+      })
       alert('Goals rejected. Employee will be notified.')
     }
   }
@@ -206,6 +276,7 @@ export default function ManagerDashboard({
                             <th>Thrust Area</th>
                             <th>Goal Title</th>
                             <th>UoM</th>
+                            <th>Logic</th>
                             <th>Target</th>
                             <th>Weightage</th>
                           </tr>
@@ -216,12 +287,46 @@ export default function ManagerDashboard({
                               <td>{goal.thrustArea}</td>
                               <td>{goal.title}</td>
                               <td>{goal.uom}</td>
-                              <td>{goal.target}</td>
-                              <td>{goal.weightage}%</td>
+                              <td>{goal.metricType || '-'}</td>
+                              <td>
+                                <input
+                                  type="number"
+                                  className="form-input"
+                                  value={goal.target ?? ''}
+                                  onChange={(e) =>
+                                    handleInlineGoalEdit(
+                                      goal.id,
+                                      'target',
+                                      Number(e.target.value || 0)
+                                    )
+                                  }
+                                  disabled={goal.uom === 'ZERO'}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="number"
+                                  className="form-input"
+                                  min={10}
+                                  max={100}
+                                  value={goal.weightage}
+                                  onChange={(e) =>
+                                    handleInlineGoalEdit(
+                                      goal.id,
+                                      'weightage',
+                                      Number(e.target.value || 0)
+                                    )
+                                  }
+                                />
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
+                    </div>
+
+                    <div className="bg-gray-100 rounded-lg p-3 mb-6 text-sm text-gray-700">
+                      Total Weightage: {selectedSubmission.goals.reduce((sum, g) => sum + Number(g.weightage || 0), 0)}%
                     </div>
 
                     {/* Feedback */}

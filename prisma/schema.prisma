@@ -24,12 +24,54 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   // Relations
-  goalSheets    GoalSheet[]
+  employeeGoalSheets GoalSheet[] @relation("EmployeeGoalSheets")
+  managedGoalSheets  GoalSheet[] @relation("ManagedGoalSheets")
+  accounts      Account[]
+  sessions      Session[]
   checkIns      CheckIn[]
   auditLogs     AuditLog[]
   
   @@index([reportingManagerId])
   @@index([role])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?  @db.Text
+  access_token      String?  @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?  @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
 
 enum Role {
@@ -42,10 +84,10 @@ enum Role {
 model GoalSheet {
   id            String    @id @default(cuid())
   employeeId    String
-  employee      User      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee      User      @relation("EmployeeGoalSheets", fields: [employeeId], references: [id], onDelete: Cascade)
   
   managerId     String?   // Manager who approved
-  manager       User?     @relation(fields: [managerId], references: [id])
+  manager       User?     @relation("ManagedGoalSheets", fields: [managerId], references: [id])
   
   status        GoalSheetStatus @default(DRAFT) // DRAFT, SUBMITTED, APPROVED, LOCKED
   cycleYear     Int       // 2024, 2025, etc

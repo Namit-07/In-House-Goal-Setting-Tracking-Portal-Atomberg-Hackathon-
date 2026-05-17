@@ -5,6 +5,9 @@ import GoalForm from '../goal/GoalForm'
 import GoalList from '../goal/GoalList'
 import CheckInForm from '../checkin/CheckInForm'
 import CheckInList from '../checkin/CheckInList'
+import { appendAuditLog } from '../../lib/auditLog'
+import { canLogCheckIn, getCurrentCyclePhase, getCycleMessage } from '../../lib/cycleWindow'
+import { saveGoalSheet, saveGoalSheets } from '../../lib/persistence'
 
 interface Goal {
   id: string
@@ -12,12 +15,15 @@ interface Goal {
   title: string
   description?: string
   uom: 'NUMERIC' | 'PERCENTAGE' | 'TIMELINE' | 'ZERO'
+  metricType?: 'MIN' | 'MAX'
   target?: number
   weightage: number
   actualAchievement?: number
   progressScore?: number
   status: 'NOT_STARTED' | 'ON_TRACK' | 'COMPLETED'
   isSharedGoal?: boolean
+  sharedGoalGroupId?: string
+  sharedPrimaryOwnerId?: string
   checkIns?: CheckInRecord[]
 }
 
@@ -57,6 +63,34 @@ export default function EmployeeDashboard({
   const [showForm, setShowForm] = useState(false)
   const [selectedQuarter, setSelectedQuarter] = useState<'Q1' | 'Q2' | 'Q3' | 'Q4'>('Q1')
   const [checkInGoalId, setCheckInGoalId] = useState<string | null>(null)
+  const currentPhase = getCurrentCyclePhase()
+  const activeQuarter = currentPhase === 'PHASE1' ? null : currentPhase
+
+  const syncToSharedStore = (updatedGoalSheet: GoalSheet) => {
+    const allGoalSheetsRaw = localStorage.getItem('all-goalsheets')
+    const allGoalSheets = allGoalSheetsRaw ? JSON.parse(allGoalSheetsRaw) : []
+    const payload = {
+      id: updatedGoalSheet.id,
+      employeeId: user.id,
+      employeeName: user.name,
+      department: user.department || 'Engineering',
+      goals: updatedGoalSheet.goals,
+      status: updatedGoalSheet.status,
+      submittedAt: updatedGoalSheet.submittedAt,
+      approvedAt: updatedGoalSheet.approvedAt,
+    }
+
+    const existingIndex = allGoalSheets.findIndex(
+      (sheet: { id: string }) => sheet.id === updatedGoalSheet.id
+    )
+    if (existingIndex >= 0) {
+      allGoalSheets[existingIndex] = payload
+    } else {
+      allGoalSheets.push(payload)
+    }
+    localStorage.setItem('all-goalsheets', JSON.stringify(allGoalSheets))
+    void saveGoalSheet(payload as any)
+  }
 
   // Load data from localStorage
   useEffect(() => {
@@ -73,6 +107,12 @@ export default function EmployeeDashboard({
     }
   }, [user.id])
 
+  useEffect(() => {
+    if (activeQuarter) {
+      setSelectedQuarter(activeQuarter)
+    }
+  }, [activeQuarter])
+
   const handleAddGoal = (goal: Goal) => {
     if (!goalSheet) return
 
@@ -86,6 +126,17 @@ export default function EmployeeDashboard({
 
     setGoalSheet(updatedGoalSheet)
     localStorage.setItem(`goalsheet-${user.id}`, JSON.stringify(updatedGoalSheet))
+    syncToSharedStore(updatedGoalSheet)
+    void saveGoalSheet({
+      id: updatedGoalSheet.id,
+      employeeId: user.id,
+      employeeName: user.name,
+      department: user.department || 'Engineering',
+      goals: updatedGoalSheet.goals,
+      status: updatedGoalSheet.status,
+      submittedAt: updatedGoalSheet.submittedAt,
+      approvedAt: updatedGoalSheet.approvedAt,
+    } as any)
     setShowForm(false)
   }
 
@@ -99,6 +150,17 @@ export default function EmployeeDashboard({
 
     setGoalSheet(updatedGoalSheet)
     localStorage.setItem(`goalsheet-${user.id}`, JSON.stringify(updatedGoalSheet))
+    syncToSharedStore(updatedGoalSheet)
+    void saveGoalSheet({
+      id: updatedGoalSheet.id,
+      employeeId: user.id,
+      employeeName: user.name,
+      department: user.department || 'Engineering',
+      goals: updatedGoalSheet.goals,
+      status: updatedGoalSheet.status,
+      submittedAt: updatedGoalSheet.submittedAt,
+      approvedAt: updatedGoalSheet.approvedAt,
+    } as any)
   }
 
   const handleUpdateGoal = (goalId: string, updatedGoal: Partial<Goal>) => {
@@ -113,6 +175,7 @@ export default function EmployeeDashboard({
 
     setGoalSheet(updatedGoalSheet)
     localStorage.setItem(`goalsheet-${user.id}`, JSON.stringify(updatedGoalSheet))
+    syncToSharedStore(updatedGoalSheet)
   }
 
   const handleSubmitGoals = () => {
@@ -143,6 +206,25 @@ export default function EmployeeDashboard({
 
     setGoalSheet(updatedGoalSheet)
     localStorage.setItem(`goalsheet-${user.id}`, JSON.stringify(updatedGoalSheet))
+    syncToSharedStore(updatedGoalSheet)
+    void saveGoalSheet({
+      id: updatedGoalSheet.id,
+      employeeId: user.id,
+      employeeName: user.name,
+      department: user.department || 'Engineering',
+      goals: updatedGoalSheet.goals,
+      status: updatedGoalSheet.status,
+      submittedAt: updatedGoalSheet.submittedAt,
+      approvedAt: updatedGoalSheet.approvedAt,
+    } as any)
+
+    appendAuditLog({
+      action: 'GOAL_SUBMITTED',
+      actorName: user.name,
+      actorRole: 'EMPLOYEE',
+      details: `${user.name} submitted ${updatedGoalSheet.goals.length} goals for approval`,
+    })
+
     alert('Goals submitted successfully! Waiting for manager approval.')
   }
 
@@ -155,6 +237,11 @@ export default function EmployeeDashboard({
     }
   ) => {
     if (!goalSheet) return
+
+    if (!canLogCheckIn() || !activeQuarter || selectedQuarter !== activeQuarter) {
+      alert(getCycleMessage())
+      return
+    }
 
     const updatedGoalSheet = {
       ...goalSheet,
@@ -183,14 +270,84 @@ export default function EmployeeDashboard({
             })
           }
 
-          return { ...g, checkIns, status: data.status as any }
+          return {
+            ...g,
+            checkIns,
+            actualAchievement: data.actualAchievement || undefined,
+            status: data.status as 'NOT_STARTED' | 'ON_TRACK' | 'COMPLETED',
+          }
         }
         return g
       }),
     }
 
+    const submittedGoal = updatedGoalSheet.goals.find((g) => g.id === goalId)
+    if (
+      submittedGoal?.isSharedGoal &&
+      submittedGoal.sharedGoalGroupId &&
+      submittedGoal.sharedPrimaryOwnerId === user.id
+    ) {
+      const allGoalSheetsRaw = localStorage.getItem('all-goalsheets')
+      const allGoalSheets = allGoalSheetsRaw ? JSON.parse(allGoalSheetsRaw) : []
+
+      const propagatedSheets = allGoalSheets.map((sheet: any) => ({
+        ...sheet,
+        goals: (sheet.goals || []).map((g: any) =>
+          g.sharedGoalGroupId === submittedGoal.sharedGoalGroupId
+            ? {
+                ...g,
+                checkIns: submittedGoal.checkIns,
+                actualAchievement: submittedGoal.actualAchievement,
+                status: submittedGoal.status,
+              }
+            : g
+        ),
+      }))
+
+      localStorage.setItem('all-goalsheets', JSON.stringify(propagatedSheets))
+      void saveGoalSheets(propagatedSheets as any)
+
+      for (const sheet of propagatedSheets) {
+        const key = `goalsheet-${sheet.employeeId}`
+        const existingRaw = localStorage.getItem(key)
+        if (!existingRaw) {
+          continue
+        }
+        const parsed = JSON.parse(existingRaw)
+        const updatedGoals = (parsed.goals || []).map((g: any) =>
+          g.sharedGoalGroupId === submittedGoal.sharedGoalGroupId
+            ? {
+                ...g,
+                checkIns: submittedGoal.checkIns,
+                actualAchievement: submittedGoal.actualAchievement,
+                status: submittedGoal.status,
+              }
+            : g
+        )
+        localStorage.setItem(key, JSON.stringify({ ...parsed, goals: updatedGoals }))
+      }
+    } else {
+      syncToSharedStore(updatedGoalSheet)
+    }
+
     setGoalSheet(updatedGoalSheet)
     localStorage.setItem(`goalsheet-${user.id}`, JSON.stringify(updatedGoalSheet))
+    void saveGoalSheet({
+      id: updatedGoalSheet.id,
+      employeeId: user.id,
+      employeeName: user.name,
+      department: user.department || 'Engineering',
+      goals: updatedGoalSheet.goals,
+      status: updatedGoalSheet.status,
+      submittedAt: updatedGoalSheet.submittedAt,
+      approvedAt: updatedGoalSheet.approvedAt,
+    } as any)
+    appendAuditLog({
+      action: 'CHECKIN_SUBMITTED',
+      actorName: user.name,
+      actorRole: 'EMPLOYEE',
+      details: `${user.name} submitted ${selectedQuarter} check-in for goal ${goalId}`,
+    })
     setCheckInGoalId(null)
     alert(`Check-in for ${selectedQuarter} submitted successfully!`)
   }
@@ -313,6 +470,10 @@ export default function EmployeeDashboard({
                 Your goals must be approved first before you can log check-ins.
               </p>
             </div>
+          ) : !canLogCheckIn() ? (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+              <p className="text-gray-700">{getCycleMessage()}</p>
+            </div>
           ) : (
             <>
               {/* Quarter Selector */}
@@ -323,10 +484,13 @@ export default function EmployeeDashboard({
                     <button
                       key={q}
                       onClick={() => setSelectedQuarter(q)}
+                      disabled={q !== activeQuarter}
                       className={`p-3 rounded-lg font-semibold transition ${
                         selectedQuarter === q
                           ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                          : q === activeQuarter
+                          ? 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                          : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                       }`}
                     >
                       {q}
@@ -390,6 +554,7 @@ export default function EmployeeDashboard({
                         goalTitle={goal.title}
                         target={goal.target}
                         uom={goal.uom}
+                        metricType={goal.metricType}
                         checkIns={goal.checkIns}
                       />
                     )}

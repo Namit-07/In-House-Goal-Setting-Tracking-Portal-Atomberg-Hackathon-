@@ -5,12 +5,12 @@ interface Goal {
   thrustArea: string
   title: string
   description?: string
-  uom: string
+  uom: 'NUMERIC' | 'PERCENTAGE' | 'TIMELINE' | 'ZERO'
   target?: number
   weightage: number
   actualAchievement?: number
   progressScore?: number
-  status: string
+  status: 'NOT_STARTED' | 'ON_TRACK' | 'COMPLETED'
   isSharedGoal?: boolean
 }
 
@@ -29,7 +29,14 @@ export default function GoalList({
   editable = true,
   isEmployee = false,
 }: GoalListProps) {
-  const handleStatusChange = (goalId: string, newStatus: string) => {
+  const handleWeightageChange = (goalId: string, value: number) => {
+    onUpdate(goalId, { weightage: value })
+  }
+
+  const handleStatusChange = (
+    goalId: string,
+    newStatus: 'NOT_STARTED' | 'ON_TRACK' | 'COMPLETED'
+  ) => {
     onUpdate(goalId, { status: newStatus })
   }
 
@@ -104,7 +111,21 @@ export default function GoalList({
             </div>
             <div>
               <p className="text-xs text-gray-600 font-semibold">Weightage</p>
-              <p className="text-sm font-medium text-gray-800">{goal.weightage}%</p>
+              {editable && goal.isSharedGoal ? (
+                <input
+                  type="number"
+                  min={10}
+                  max={100}
+                  step={1}
+                  value={goal.weightage}
+                  onChange={(e) =>
+                    handleWeightageChange(goal.id, Number(e.target.value || 0))
+                  }
+                  className="form-input"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-800">{goal.weightage}%</p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-600 font-semibold">Progress Score</p>
@@ -119,7 +140,12 @@ export default function GoalList({
               <label className="form-label">Status Update</label>
               <select
                 value={goal.status}
-                onChange={(e) => handleStatusChange(goal.id, e.target.value)}
+                onChange={(e) =>
+                  handleStatusChange(
+                    goal.id,
+                    e.target.value as 'NOT_STARTED' | 'ON_TRACK' | 'COMPLETED'
+                  )
+                }
                 className="form-select"
                 disabled={!editable}
               >

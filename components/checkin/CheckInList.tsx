@@ -1,6 +1,6 @@
 'use client'
 
-import { calculateProgressScore, getScoreBadgeClass } from '@/lib/progressScore'
+import { calculateProgressScore, getScoreBadgeClass } from '../../lib/progressScore'
 
 interface CheckIn {
   quarter: string
@@ -14,6 +14,7 @@ interface CheckInListProps {
   goalTitle: string
   target?: number
   uom: string
+  metricType?: 'MIN' | 'MAX'
   checkIns: CheckIn[]
 }
 
@@ -21,6 +22,7 @@ export default function CheckInList({
   goalTitle,
   target,
   uom,
+  metricType = 'MIN',
   checkIns,
 }: CheckInListProps) {
   if (!checkIns || checkIns.length === 0) {
@@ -49,7 +51,8 @@ export default function CheckInList({
               const progressScore = calculateProgressScore(
                 uom,
                 target,
-                checkIn.actualAchievement
+                checkIn.actualAchievement,
+                metricType
               )
 
               return (

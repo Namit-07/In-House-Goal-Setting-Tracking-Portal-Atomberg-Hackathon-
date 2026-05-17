@@ -1,7 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { calculateProgressScore } from '@/lib/progressScore'
+import { calculateProgressScore } from '../../lib/progressScore'
+import { appendAuditLog } from '../../lib/auditLog'
+import { canLogCheckIn, getCurrentCyclePhase, getCycleMessage } from '../../lib/cycleWindow'
+import { loadGoalSheets, saveGoalSheets } from '../../lib/persistence'
 
 interface CheckIn {
   quarter: string
@@ -16,6 +19,7 @@ interface Goal {
   title: string
   target?: number
   uom: string
+  metricType?: 'MIN' | 'MAX'
   weightage: number
   checkIns?: CheckIn[]
 }
@@ -38,13 +42,13 @@ export default function ManagerCheckIn({ user }: ManagerCheckInProps) {
   const [teamMembers, setTeamMembers] = useState<TeamMemberCheckIns[]>([])
   const [selectedMember, setSelectedMember] = useState<TeamMemberCheckIns | null>(null)
   const [selectedQuarter, setSelectedQuarter] = useState<'Q1' | 'Q2' | 'Q3' | 'Q4'>('Q1')
-  const [feedback, setFeedback] = useState('')
+  const [feedbackByGoal, setFeedbackByGoal] = useState<Record<string, string>>({})
+  const currentPhase = getCurrentCyclePhase()
+  const activeQuarter = currentPhase === 'PHASE1' ? null : currentPhase
 
-  // Load team member data from localStorage
-  useEffect(() => {
-    const allGoalSheets = localStorage.getItem('all-goalsheets')
-    if (allGoalSheets) {
-      const sheets = JSON.parse(allGoalSheets)
+  const loadTeamMembers = (preferredEmployeeId?: string) => {
+    void (async () => {
+      const sheets = await loadGoalSheets()
       const teamGoals = sheets
         .filter((s: any) => s.status === 'LOCKED') // Only approved goals
         .map((s: any) => ({
@@ -56,42 +60,85 @@ export default function ManagerCheckIn({ user }: ManagerCheckInProps) {
 
       setTeamMembers(teamGoals)
       if (teamGoals.length > 0) {
-        setSelectedMember(teamGoals[0])
+        const preferred = teamGoals.find((m: TeamMemberCheckIns) => m.employeeId === preferredEmployeeId)
+        setSelectedMember(preferred || teamGoals[0])
+      } else {
+        setSelectedMember(null)
       }
-    }
+    })()
+  }
+
+  // Load team member data from localStorage
+  useEffect(() => {
+    loadTeamMembers()
   }, [])
 
+  useEffect(() => {
+    if (activeQuarter) {
+      setSelectedQuarter(activeQuarter)
+    }
+  }, [activeQuarter])
+
   const handleAddCheckInComment = (goalId: string) => {
-    if (!selectedMember || !feedback.trim()) {
+    if (!canLogCheckIn() || !activeQuarter || selectedQuarter !== activeQuarter) {
+      alert(getCycleMessage())
+      return
+    }
+
+    const feedback = (feedbackByGoal[goalId] || '').trim()
+    if (!selectedMember || !feedback) {
       alert('Please enter feedback before submitting')
       return
     }
 
-    const updatedMember = {
-      ...selectedMember,
-      goals: selectedMember.goals.map((g) => {
-        if (g.id === goalId) {
-          const checkIns = g.checkIns || []
-          const checkInIndex = checkIns.findIndex((c) => c.quarter === selectedQuarter)
+    void (async () => {
+      const allGoalSheets = await loadGoalSheets()
+      const updatedGoalSheets = allGoalSheets.map((sheet: any) => {
+        if (sheet.employeeId !== selectedMember.employeeId) {
+          return sheet
+        }
+
+        const updatedGoals = (sheet.goals || []).map((goal: any) => {
+          if (goal.id !== goalId) {
+            return goal
+          }
+          const checkIns = [...(goal.checkIns || [])]
+          const checkInIndex = checkIns.findIndex((c: any) => c.quarter === selectedQuarter)
           if (checkInIndex >= 0) {
             checkIns[checkInIndex] = {
               ...checkIns[checkInIndex],
               managerComment: feedback,
             }
           }
-          return { ...g, checkIns }
-        }
-        return g
-      }),
-    }
+          return { ...goal, checkIns }
+        })
 
-    setSelectedMember(updatedMember)
-    setFeedback('')
+        return { ...sheet, goals: updatedGoals }
+      })
+
+      localStorage.setItem('all-goalsheets', JSON.stringify(updatedGoalSheets))
+      await saveGoalSheets(updatedGoalSheets as any)
+    })()
+
+    setFeedbackByGoal((prev) => ({ ...prev, [goalId]: '' }))
+    loadTeamMembers(selectedMember.employeeId)
+    appendAuditLog({
+      action: 'MANAGER_CHECKIN_FEEDBACK',
+      actorName: user.name,
+      actorRole: 'MANAGER',
+      details: `${user.name} added ${selectedQuarter} feedback for ${selectedMember.employeeName}, goal ${goalId}`,
+    })
     alert('Feedback added successfully!')
   }
 
   return (
     <div className="space-y-6">
+      {!canLogCheckIn() && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+          <p className="text-gray-700">{getCycleMessage()}</p>
+        </div>
+      )}
+
       {/* Quarter Selector */}
       <div className="bg-white rounded-lg shadow-md p-6">
         <h3 className="text-lg font-semibold mb-4">Select Quarter to Review</h3>
@@ -100,10 +147,13 @@ export default function ManagerCheckIn({ user }: ManagerCheckInProps) {
             <button
               key={q}
               onClick={() => setSelectedQuarter(q)}
+              disabled={q !== activeQuarter}
               className={`p-3 rounded-lg font-semibold transition ${
                 selectedQuarter === q
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                  : q === activeQuarter
+                  ? 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
               }`}
             >
               {q}
@@ -162,7 +212,8 @@ export default function ManagerCheckIn({ user }: ManagerCheckInProps) {
                     const progressScore = calculateProgressScore(
                       goal.uom,
                       goal.target,
-                      checkInForQuarter?.actualAchievement
+                      checkInForQuarter?.actualAchievement,
+                      goal.metricType || 'MIN'
                     )
 
                     return (
@@ -223,12 +274,13 @@ export default function ManagerCheckIn({ user }: ManagerCheckInProps) {
                                 Add Feedback for This Goal
                               </label>
                               <textarea
-                                value={
-                                  feedback && selectedMember?.goals.find(g => g.id === goal.id) === goal
-                                    ? feedback
-                                    : ''
+                                value={feedbackByGoal[goal.id] || ''}
+                                onChange={(e) =>
+                                  setFeedbackByGoal((prev) => ({
+                                    ...prev,
+                                    [goal.id]: e.target.value,
+                                  }))
                                 }
-                                onChange={(e) => setFeedback(e.target.value)}
                                 placeholder="Add manager feedback or comments..."
                                 className="form-textarea text-sm"
                                 rows={2}

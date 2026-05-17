@@ -17,7 +17,8 @@ export interface ProgressScoreResult {
 export function calculateProgressScore(
   uom: string,
   target: number | undefined,
-  actual: number | undefined
+  actual: number | undefined,
+  metricType: 'MIN' | 'MAX' = 'MIN'
 ): ProgressScoreResult {
   if (!actual || target === undefined) {
     return {
@@ -33,27 +34,27 @@ export function calculateProgressScore(
   switch (uom) {
     case 'NUMERIC':
     case 'PERCENTAGE':
-      // Min type: Higher is better (e.g., Sales Revenue)
-      // Achievement ÷ Target
-      score = actual / target
-      interpretation =
-        score >= 1
-          ? '✓ Target achieved'
-          : score >= 0.8
-          ? '⚠ Near target'
-          : '✗ Below target'
-      break
-
-    case 'MAX':
-      // Max type: Lower is better (e.g., TAT, Cost)
-      // Target ÷ Achievement
-      score = target / actual
-      interpretation =
-        score >= 1
-          ? '✓ Better than target'
-          : score >= 0.8
-          ? '⚠ Close to target'
-          : '✗ Exceeded target'
+      if (metricType === 'MAX') {
+        // Lower is better (e.g., TAT, Cost)
+        // Target ÷ Achievement
+        score = target / actual
+        interpretation =
+          score >= 1
+            ? '✓ Better than target'
+            : score >= 0.8
+            ? '⚠ Close to target'
+            : '✗ Exceeded target'
+      } else {
+        // Higher is better (e.g., Revenue, Output)
+        // Achievement ÷ Target
+        score = actual / target
+        interpretation =
+          score >= 1
+            ? '✓ Target achieved'
+            : score >= 0.8
+            ? '⚠ Near target'
+            : '✗ Below target'
+      }
       break
 
     case 'TIMELINE':
