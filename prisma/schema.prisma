@@ -1,0 +1,188 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  role          Role      @default(EMPLOYEE) // EMPLOYEE, MANAGER, ADMIN
+  reportingManagerId String?
+  reportingManager  User?   @relation("ManagerToEmployee", fields: [reportingManagerId], references: [id])
+  employees     User[]    @relation("ManagerToEmployee")
+  department    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  goalSheets    GoalSheet[]
+  checkIns      CheckIn[]
+  auditLogs     AuditLog[]
+  
+  @@index([reportingManagerId])
+  @@index([role])
+}
+
+enum Role {
+  EMPLOYEE
+  MANAGER
+  ADMIN
+}
+
+// GoalSheet model
+model GoalSheet {
+  id            String    @id @default(cuid())
+  employeeId    String
+  employee      User      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  
+  managerId     String?   // Manager who approved
+  manager       User?     @relation(fields: [managerId], references: [id])
+  
+  status        GoalSheetStatus @default(DRAFT) // DRAFT, SUBMITTED, APPROVED, LOCKED
+  cycleYear     Int       // 2024, 2025, etc
+  
+  createdAt     DateTime  @default(now())
+  submittedAt   DateTime?
+  approvedAt    DateTime?
+  
+  // Relations
+  goals         Goal[]
+  auditLogs     AuditLog[]
+  
+  @@index([employeeId])
+  @@index([managerId])
+  @@index([status])
+  @@unique([employeeId, cycleYear]) // One goal sheet per employee per year
+}
+
+enum GoalSheetStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  LOCKED
+  REJECTED
+}
+
+// Goal model
+model Goal {
+  id            String    @id @default(cuid())
+  goalSheetId   String
+  goalSheet     GoalSheet @relation(fields: [goalSheetId], references: [id], onDelete: Cascade)
+  
+  thrustArea    String    // Strategic focus area
+  title         String
+  description   String?
+  
+  uom           UnitOfMeasurement @default(NUMERIC) // NUMERIC, PERCENTAGE, TIMELINE, ZERO
+  target        Float?    // Target value (can be negative for some UoMs)
+  weightage     Float     @default(10) // 0-100
+  
+  // Achievement tracking
+  actualAchievement Float?
+  progressScore     Float?  // Calculated based on UoM
+  status        GoalStatus @default(NOT_STARTED)
+  
+  // Shared goals
+  sharedGoalId  String?   // Reference to original goal if this is a shared instance
+  isSharedGoal  Boolean   @default(false)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  checkIns      CheckIn[]
+  auditLogs     AuditLog[]
+  
+  @@index([goalSheetId])
+  @@index([sharedGoalId])
+}
+
+enum UnitOfMeasurement {
+  NUMERIC
+  PERCENTAGE
+  TIMELINE
+  ZERO
+}
+
+enum GoalStatus {
+  NOT_STARTED
+  ON_TRACK
+  COMPLETED
+}
+
+// CheckIn model (Quarterly updates)
+model CheckIn {
+  id            String    @id @default(cuid())
+  goalId        String
+  goal          Goal      @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  
+  userId        String    // Employee or Manager who logged the check-in
+  user          User      @relation(fields: [userId], references: [id])
+  
+  quarter       Quarter   @default(Q1) // Q1, Q2, Q3, Q4
+  
+  actualAchievement Float?
+  managerComment    String?
+  
+  completedAt   DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([goalId])
+  @@index([userId])
+  @@index([quarter])
+  @@unique([goalId, quarter]) // One check-in per goal per quarter
+}
+
+enum Quarter {
+  Q1
+  Q2
+  Q3
+  Q4
+}
+
+// AuditLog model
+model AuditLog {
+  id            String    @id @default(cuid())
+  
+  userId        String    // Who made the change
+  user          User      @relation(fields: [userId], references: [id])
+  
+  goalSheetId   String?
+  goalSheet     GoalSheet? @relation(fields: [goalSheetId], references: [id], onDelete: SetNull)
+  
+  goalId        String?
+  goal          Goal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  
+  action        AuditAction
+  changes       String?   // JSON stringified changes
+  
+  createdAt     DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([goalSheetId])
+  @@index([goalId])
+  @@index([createdAt])
+}
+
+enum AuditAction {
+  GOAL_CREATED
+  GOAL_UPDATED
+  GOAL_SUBMITTED
+  GOAL_APPROVED
+  GOAL_REJECTED
+  GOAL_LOCKED
+  GOAL_UNLOCKED
+  ACHIEVEMENT_LOGGED
+  CHECKIN_COMPLETED
+  SHARED_GOAL_PUSHED
+  SHARED_GOAL_UPDATED
+}
